@@ -1,6 +1,8 @@
 homepage: "https://github.com/javier-garijo-gtm"
-documentation: "https://github.com/javier-garijo-gtm/preferential-google-click-id-web/blob/main/README.md"
+documentation: "https://github.com/javier-garijo-gtm/preferential-google-click-id-server/blob/main/README.md"
 
 versions:
-  - sha: "6519c7a84393c096358e68ed12960832cc793791"
-    changeNotes: "Initial release of Preferential Google Ads Click ID - Fixed Analytics™: retrieves six Google Ads click IDs and automatically selects a preferential click ID with its source cookie."
+  - sha: "c5f8bd02d30382eb9b881d6f85a4de93736ec96c"
+    changeNotes: "Updated server-side preferential click ID template and documentation."
+  - sha: "b484f2c4e2850ed6fab251d3d744c8803f977231"
+    changeNotes: "Initial release of Preferential Google Ads Click ID - Fixed Analytics™. Selects the preferred click ID from up to six configured GCLID, GBRAID, and WBRAID values, with source identification and configurable logging."
