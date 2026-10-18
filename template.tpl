@@ -1,6 +1,6 @@
 ___TERMS_OF_SERVICE___
 
-By creating or modifying this file you agree to Google's Community
+By creating or modifying this file you agree to Google Tag Manager's Community
 Template Gallery Developer Terms of Service available at
 https://developers.google.com/tag-manager/gallery-tos (or such other URL as
 Google may provide), as modified from time to time.
@@ -13,14 +13,14 @@ ___INFO___
   "version": 1,
   "securityGroups": [],
   "displayName": "Preferential Google Ads Click ID - Fixed Analytics™",
-  "description": "Server GTM variable that selects the preferential Google Ads click ID using GCLID > GBRAID > WBRAID priority and identifies its source cookie.",
+  "description": "Fetches six click IDs and selects a preferential ID by priority, with its source cookie. Checks ad_storage consent.",
   "categories": [
     "ATTRIBUTION",
-    "CONVERSIONS",
+    "ADVERTISING",
     "UTILITY"
   ],
   "containerContexts": [
-    "SERVER"
+    "WEB"
   ]
 }
 
@@ -28,72 +28,14 @@ ___TEMPLATE_PARAMETERS___
 
 [
   {
-    "type": "GROUP",
-    "name": "clickIdsGroup",
-    "displayName": "Click ID configuration",
-    "groupStyle": "ZIPPY_OPEN",
-    "subParams": [
-      {
-        "type": "SIMPLE_TABLE",
-        "name": "clickIdInputs",
-        "displayName": "Click IDs from database",
-        "help": "Choose one of the six cookie sources and select the server GTM variable containing its click ID. Add as many rows as needed; do not enter the entire cookie value.",
-        "newRowButtonText": "Add click ID",
-        "simpleTableColumns": [
-          {
-            "type": "SELECT",
-            "name": "clickIdType",
-            "displayName": "Click ID type",
-            "defaultValue": "",
-            "selectItems": [
-              {
-                "value": "",
-                "displayValue": "Choose click ID type"
-              },
-              {
-                "value": "FPGCLAW",
-                "displayValue": "FPGCLAW"
-              },
-              {
-                "value": "_gcl_aw",
-                "displayValue": "_gcl_aw"
-              },
-              {
-                "value": "FPGCLAG",
-                "displayValue": "FPGCLAG"
-              },
-              {
-                "value": "_gcl_ag",
-                "displayValue": "_gcl_ag"
-              },
-              {
-                "value": "FPGCLGB",
-                "displayValue": "FPGCLGB"
-              },
-              {
-                "value": "_gcl_gb",
-                "displayValue": "_gcl_gb"
-              }
-            ],
-            "macrosInSelect": false,
-            "isUnique": true
-          },
-          {
-            "type": "TEXT",
-            "name": "clickIdValue",
-            "displayName": "Click ID value (variable)",
-            "defaultValue": "",
-            "valueHint": "e.g. {{DB - GCLID}}"
-          }
-        ]
-      },
-      {
-        "type": "LABEL",
-        "name": "priorityHelp",
-        "displayName": "Priority: FPGCLAW > _gcl_aw > FPGCLAG > _gcl_ag > FPGCLGB > _gcl_gb. GCLID wins over GBRAID/WBRAID; first-party wins within the same ID type."
-      }
-    ],
-    "help": "Add one row per click ID available from your database. The value must be the click ID itself, not a full cookie string. Row order does not change priority. Works whenever a tag evaluates this variable, on any event."
+    "type": "LABEL",
+    "name": "output_description",
+    "displayName": "Returns six click IDs plus preferential_click_id (ID only) and preferential_click_id_type (exact cookie name). Priority: FPGCLAW > _gcl_aw > FPGCLAG > _gcl_ag > FPGCLGB > _gcl_gb. Missing IDs: null. Requires ad_storage consent."
+  },
+  {
+    "type": "LABEL",
+    "name": "developer_attribution",
+    "displayName": "Developed by Javier Garijo | Fixed Analytics™ | github.com/javier-garijo-gtm"
   },
   {
     "type": "GROUP",
@@ -115,114 +57,256 @@ ___TEMPLATE_PARAMETERS___
           },
           {
             "value": "debug",
-            "displayValue": "Debug Mode",
-            "help": "Only log when server GTM Preview or Debug mode is active."
+            "displayValue": "Debug Mode (Default)",
+            "help": "Log only in GTM Preview/Debug."
           },
           {
             "value": "always",
             "displayValue": "Always Log",
-            "help": "Log in both Preview and production."
+            "help": "Log in Preview and production."
           }
         ],
-        "help": "Logs the number of available click IDs and the winning source cookie, never the click ID values. Default: Debug Mode."
+        "help": "Logs only consent outcome, number of available IDs, and preferred source cookie. Never logs actual click ID values."
       }
     ]
   }
 ]
 
-___SANDBOXED_JS_FOR_SERVER___
+___SANDBOXED_JS_FOR_WEB_TEMPLATE___
 
 // Preferential Google Ads Click ID - Fixed Analytics™
 // Developer: Javier Garijo (github.com/javier-garijo-gtm)
-// Receives click IDs from user-selected GTM variables; does not fetch cookies.
-// Input table row order does not affect identifier priority.
+// Cookie retrieval and GBRAID parsing replicate the original working fetcher.
+// Checks Google Consent Mode ad_storage before accessing cookies.
+const isConsentGranted = require('isConsentGranted');
+const getCookieValues = require('getCookieValues');
+const logToConsole = require('logToConsole');
+const getContainerVersion = require('getContainerVersion');
 
-// Logging deliberately excludes actual click IDs to prevent identifier leakage.
-var logToConsole = require('logToConsole');
-var getContainerVersion = require('getContainerVersion');
-
-function isLoggingEnabled() {
-  var preference = data.loggingPreference || 'debug';
-  if (preference === 'none') return false;
-  if (preference === 'always') return true;
-  var version = getContainerVersion();
-  return !!(version && (version.debugMode || version.previewMode));
+// Logging is optional and never includes the click ID values.
+function loggingIsEnabled() {
+  var setting = data.loggingPreference || 'debug';
+  if (setting === 'none') return false;
+  if (setting === 'always') return true;
+  var container = getContainerVersion();
+  return !!(container && (container.debugMode || container.previewMode));
 }
 
-function cleanClickId(value) {
-  // Click identifiers are strings. Do not stringify absent values into IDs.
-  if (typeof value !== 'string') return null;
-  var cleaned = value.trim();
-  if (!cleaned) return null;
-  if (cleaned === 'undefined' || cleaned === 'null') return null;
-  return cleaned;
-}
-
-var result = {
-  fp_gclid: null,
-  fp_gbraid: null,
-  fp_wbraid: null,
-  gclid: null,
-  gbraid: null,
-  wbraid: null
-};
-
-var sourceFields = {
-  'FPGCLAW': 'fp_gclid',
-  '_gcl_aw': 'gclid',
-  'FPGCLAG': 'fp_gbraid',
-  '_gcl_ag': 'gbraid',
-  'FPGCLGB': 'fp_wbraid',
-  '_gcl_gb': 'wbraid'
-};
-
-var rows = data.clickIdInputs || [];
-for (var i = 0; i < rows.length; i++) {
-  var row = rows[i];
-  if (!row) continue;
-  var field = sourceFields[row.clickIdType];
-  if (!field || result[field] !== null) continue;
-  var id = cleanClickId(row.clickIdValue);
-  if (id !== null) result[field] = id;
-}
-
-// Identifier type outranks source; first-party outranks JS within that type.
-var priority = [
-  ['fp_gclid', 'FPGCLAW'],
-  ['gclid', '_gcl_aw'],
-  ['fp_gbraid', 'FPGCLAG'],
-  ['gbraid', '_gcl_ag'],
-  ['fp_wbraid', 'FPGCLGB'],
-  ['wbraid', '_gcl_gb']
-];
-
-result.preferential_click_id = null;
-result.preferential_click_id_type = null;
-for (var j = 0; j < priority.length; j++) {
-  var candidate = priority[j];
-  if (result[candidate[0]] !== null) {
-    result.preferential_click_id = result[candidate[0]];
-    result.preferential_click_id_type = candidate[1];
-    break;
+if (!isConsentGranted('ad_storage')) {
+  if (loggingIsEnabled()) {
+    logToConsole('Preferential Google Ads Click ID - Fixed Analytics™: ad_storage denied; cookies not read');
   }
+  return undefined;
 }
 
-if (isLoggingEnabled()) {
+// The original working GCLID method: read the first cookie value and
+// take the last dot-separated section, e.g. GCL.123456.CLICK_ID.
+function lastDotSegment(cookieName) {
+  var values = getCookieValues(cookieName);
+  if (!values || !values.length) return null;
+  var raw = values[0];
+  if (typeof raw !== 'string') return null;
+  var parts = raw.split('.');
+  if (parts.length < 2) return null;
+  return parts[parts.length - 1] || null;
+}
+
+// The original working GBRAID method: read values[0], find 'k',
+// then take everything until '$', e.g. 2.1.kOOPS$i1792264191 -> OOPS.
+// Used for both FP and JS braid cookies, including _gcl_gb (WBRAID).
+function idAfterK(cookieName) {
+  var values = getCookieValues(cookieName);
+  if (!values || !values.length) return null;
+  var raw = values[0];
+  if (typeof raw !== 'string') return null;
+  var kIndex = raw.indexOf('k');
+  if (kIndex === -1) return null;
+  var afterK = raw.substring(kIndex + 1);
+  var dollarIndex = afterK.indexOf('$');
+  var id = (dollarIndex === -1) ? afterK : afterK.substring(0, dollarIndex);
+  return id || null;
+}
+
+// Preserve the working last-dot GCLID behavior; support the newer 2.x.k
+// form too if an FP GCLID cookie uses that envelope.
+function readGclid(cookieName) {
+  var values = getCookieValues(cookieName);
+  if (!values || !values.length) return null;
+  var raw = values[0];
+  if (typeof raw !== 'string') return null;
+  if (raw.indexOf('2.') === 0 && raw.indexOf('.k') !== -1) {
+    return idAfterK(cookieName);
+  }
+  return lastDotSegment(cookieName);
+}
+
+// Most WBRAID cookies use the same 2.x.k format as GBRAID.
+// Retain compatibility with the older GCL.timestamp.id format.
+function readWbraid(cookieName) {
+  var values = getCookieValues(cookieName);
+  if (!values || !values.length) return null;
+  var raw = values[0];
+  if (typeof raw !== 'string') return null;
+  if (raw.indexOf('GCL.') === 0) return lastDotSegment(cookieName);
+  return idAfterK(cookieName);
+}
+
+// Each field is fetched on variable evaluation, directly through the same
+// getCookieValues API and first-entry parsing used by the working template.
+var result = {
+  fp_gclid: readGclid('FPGCLAW'),
+  fp_gbraid: idAfterK('FPGCLAG'),
+  fp_wbraid: readWbraid('FPGCLGB'),
+  gclid: readGclid('_gcl_aw'),
+  gbraid: idAfterK('_gcl_ag'),
+  wbraid: readWbraid('_gcl_gb')
+};
+
+var preferred = null;
+var preferredType = null;
+if (result.fp_gclid !== null) {
+  preferred = result.fp_gclid;
+  preferredType = 'FPGCLAW';
+} else if (result.gclid !== null) {
+  preferred = result.gclid;
+  preferredType = '_gcl_aw';
+} else if (result.fp_gbraid !== null) {
+  preferred = result.fp_gbraid;
+  preferredType = 'FPGCLAG';
+} else if (result.gbraid !== null) {
+  preferred = result.gbraid;
+  preferredType = '_gcl_ag';
+} else if (result.fp_wbraid !== null) {
+  preferred = result.fp_wbraid;
+  preferredType = 'FPGCLGB';
+} else if (result.wbraid !== null) {
+  preferred = result.wbraid;
+  preferredType = '_gcl_gb';
+}
+result.preferential_click_id = preferred;
+result.preferential_click_id_type = preferredType;
+if (loggingIsEnabled()) {
   var availableCount = 0;
   var fieldsToCount = ['fp_gclid', 'fp_gbraid', 'fp_wbraid', 'gclid', 'gbraid', 'wbraid'];
-  for (var k = 0; k < fieldsToCount.length; k++) {
-    if (result[fieldsToCount[k]] !== null) availableCount++;
+  for (var i = 0; i < fieldsToCount.length; i++) {
+    if (result[fieldsToCount[i]] !== null) availableCount++;
   }
   logToConsole('Preferential Google Ads Click ID - Fixed Analytics™: ' +
-    'available IDs=' + availableCount +
-    ', selected cookie=' + (result.preferential_click_id_type || 'none'));
+    'ad_storage check passed, available IDs=' + availableCount +
+    ', preferred cookie=' + (result.preferential_click_id_type || 'none'));
 }
 
 return result;
 
-___SERVER_PERMISSIONS___
+___WEB_PERMISSIONS___
 
 [
+  {
+    "instance": {
+      "key": {
+        "publicId": "get_cookies",
+        "versionId": "1"
+      },
+      "param": [
+        {
+          "key": "cookieAccess",
+          "value": {
+            "type": 1,
+            "string": "specific"
+          }
+        },
+        {
+          "key": "cookieNames",
+          "value": {
+            "type": 2,
+            "listItem": [
+              {
+                "type": 1,
+                "string": "FPGCLAW"
+              },
+              {
+                "type": 1,
+                "string": "FPGCLAG"
+              },
+              {
+                "type": 1,
+                "string": "FPGCLGB"
+              },
+              {
+                "type": 1,
+                "string": "_gcl_aw"
+              },
+              {
+                "type": 1,
+                "string": "_gcl_ag"
+              },
+              {
+                "type": 1,
+                "string": "_gcl_gb"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "clientAnnotations": {
+      "isEditedByUser": true
+    },
+    "isRequired": true
+  },
+  {
+    "instance": {
+      "key": {
+        "publicId": "access_consent",
+        "versionId": "1"
+      },
+      "param": [
+        {
+          "key": "consentTypes",
+          "value": {
+            "type": 2,
+            "listItem": [
+              {
+                "type": 3,
+                "mapKey": [
+                  {
+                    "type": 1,
+                    "string": "consentType"
+                  },
+                  {
+                    "type": 1,
+                    "string": "read"
+                  },
+                  {
+                    "type": 1,
+                    "string": "write"
+                  }
+                ],
+                "mapValue": [
+                  {
+                    "type": 1,
+                    "string": "ad_storage"
+                  },
+                  {
+                    "type": 8,
+                    "boolean": true
+                  },
+                  {
+                    "type": 8,
+                    "boolean": false
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "clientAnnotations": {
+      "isEditedByUser": true
+    },
+    "isRequired": true
+  },
   {
     "instance": {
       "key": {
@@ -263,9 +347,10 @@ scenarios: []
 ___NOTES___
 
 Preferential Google Ads Click ID - Fixed Analytics™. Developer: Javier Garijo.
-This is a server-side variable that accepts previously extracted click ID strings in a two-column simple table (type, value). It does not connect to a database or read cookies.
-All six supported sources: FPGCLAW, _gcl_aw, FPGCLAG, _gcl_ag, FPGCLGB, _gcl_gb.
-Priority: FPGCLAW > _gcl_aw > FPGCLAG > _gcl_ag > FPGCLGB > _gcl_gb.
-Output: fp_gclid, fp_gbraid, fp_wbraid, gclid, gbraid, wbraid, preferential_click_id, preferential_click_id_type.
-Missing inputs are null. Returns an object on all event types when evaluated, with no database access, HTTP requests, caching, or cookie access. Optional logging uses server logging and container metadata permissions; actual click IDs are never written to logs. Default: Debug Mode. No embedded tests.
-Google Ads conversion integrations must map the winning source to the correct gclid/gbraid/wbraid parameter and independently enforce applicable consent. Preferred does not mean most recent click.
+Returns eight fields: six source IDs plus preferential_click_id (click ID only) and preferential_click_id_type (source cookie name).
+Preference: FPGCLAW > _gcl_aw > FPGCLAG > _gcl_ag > FPGCLGB > _gcl_gb.
+Cookie access and GBRAID extraction intentionally replicate the original working template: first cookie value, parse after k to $.
+Uses get_cookies permission for the six specific required cookies. Checks ad_storage; no persisted storage or explicit caching.
+Null for absent IDs; undefined if ad_storage consent is denied. No embedded tests.
+
+Logging Preferences: Disable Logging, Debug Mode (default), Always Log. Logs include consent result, available-ID count, and winning cookie name only; no click ID values. Additional permissions: logging (all environments) and read_container_data for Preview/Debug detection.
